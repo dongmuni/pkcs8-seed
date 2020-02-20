@@ -24,6 +24,8 @@ import java.security.interfaces.RSAPrivateCrtKey;
 import java.security.spec.KeySpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
 import javax.crypto.Cipher;
 import javax.crypto.EncryptedPrivateKeyInfo;
@@ -85,6 +87,11 @@ public class App {
 		}
 	}
 
+	static final String PBEWithSHA1AndSEED = "1.2.410.200004.1.15";
+	static final String PBEWithSHA1AndDESede = "PBEWithSHA1AndDESede";
+	static final String PBEWithMD5AndDES = "PBEWithMD5AndDES";
+	static final Set<String> MANUAL_DECRYPTABLE_PBE_SET = new HashSet<>(Arrays.asList(PBEWithSHA1AndSEED, PBEWithSHA1AndDESede, PBEWithMD5AndDES));
+	
 	public void readKey(File file, String password) throws Exception {
 		PrivateKey privateKey = null;
 		byte[] pkbuf = FileUtils.readFileToByteArray(file);
@@ -98,7 +105,7 @@ public class App {
 		log.debug("AlgorithmParameters: value: {}", algParams);
 		log.debug("AlgorithmParameters: class: {}", algParams != null ? algParams.getClass() : "null");
 
-		if ("1.2.410.200004.1.15".equals(ePKInfo.getAlgName())) {
+		if ( MANUAL_DECRYPTABLE_PBE_SET.contains(ePKInfo.getAlgName()) ) {
 
 			try (ASN1InputStream is = new ASN1InputStream(new ByteArrayInputStream(pkbuf));) {
 				ASN1Primitive obj = is.readObject();
@@ -131,14 +138,33 @@ public class App {
 				int iter = integer.getValue().intValue();
 				log.debug("iter: {}", iter);
 
-				boolean useMy = false;
 				byte[][] keyIv = null;
-				byte[] key = null, iv = null; 
+				byte[] key = null, iv = null;
+				String cipherAlg = null;
+				String keyAlg = null;
+				String prov = null;
 				
-				if ( useMy ) {
-					keyIv = deriveSha1TripleDesKeyIv(password, salt, iter);
-				} else {
-					keyIv = this.deriveSEEDKeyIv(password, salt, iter);
+				if ( PBEWithSHA1AndSEED.equals(ePKInfo.getAlgName()) ) {
+					
+					keyIv = deriveSEEDKeyIv(MDSpec.SHA1, password, salt, iter, 16, 16);
+					cipherAlg = "SEED/CBC/PKCS5Padding";
+					keyAlg = "SEED";
+					prov = "BC";
+					
+				} else if ( PBEWithSHA1AndDESede.equals(ePKInfo.getAlgName()) ) {
+					
+					keyIv = derivePKCS12KeyIv(MDSpec.SHA1, password, salt, iter, 24, 8);
+					cipherAlg = "TripleDES/CBC/PKCS5Padding";
+					keyAlg = "TripleDES";
+					prov = "SunJCE";
+					
+				} else if ( PBEWithMD5AndDES.equals(ePKInfo.getAlgName()) ) {
+					
+					keyIv = derivePKCS5KeyIv(MDSpec.MD5, password, salt, iter, 8, 8);
+					cipherAlg = "DES/CBC/PKCS5Padding";
+					keyAlg = "DES";
+					prov = "SunJCE";
+					
 				}
 				
 				key = keyIv[0];
@@ -147,10 +173,10 @@ public class App {
 				iv = keyIv[1];
 				printBytes("iv", iv);
 
-				Cipher cipher = Cipher.getInstance("SEED/CBC/PKCS5Padding", BC_PROV);
+				Cipher cipher = Cipher.getInstance(cipherAlg, prov);
 				showObject("cipher", cipher);
 
-				cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "SEED"), new IvParameterSpec(iv));
+				cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, keyAlg), new IvParameterSpec(iv));
 				
 				boolean decryptManual = true;
 				byte[] plain = null;
@@ -158,6 +184,7 @@ public class App {
 				if ( decryptManual ) {
 					
 					plain = cipher.doFinal(ePKInfo.getEncryptedData());
+					printBytes("decryptedKey", plain);
 					PKCS8EncodedKeySpec pkcs8Spec = new PKCS8EncodedKeySpec(plain);
 					KeyFactory kf = KeyFactory.getInstance("RSA");
 					privateKey = kf.generatePrivate(pkcs8Spec);
@@ -166,12 +193,13 @@ public class App {
 				else {
 					
 					PKCS8EncodedKeySpec pkcs8Sepc = ePKInfo.getKeySpec(cipher);
-					KeyFactory kf = KeyFactory.getInstance("RSA", BC_PROV);
+					KeyFactory kf = KeyFactory.getInstance("RSA", prov);
 					privateKey = kf.generatePrivate(pkcs8Sepc);
 					plain = privateKey.getEncoded();
+					printBytes("decryptedKey", plain);
 				}
 				
-				printBytes("decryptedKey", plain);
+				//printBytes("decryptedKey", plain);
 				
 				File newFile = new File(file.getAbsolutePath() + "_");
 				FileUtils.writeByteArrayToFile(newFile, plain);
@@ -200,10 +228,12 @@ public class App {
 		showObject("Private Key", privateKey);
 	}
 
-	public void run() throws Exception {
-		File file = new File("data/signPri.key");
-		String password = "***********";
-		readKey(file, password);
+	public void run(String[] args) throws Exception {
+		for ( int i = 0 ; i < args.length ; i += 2 ) {
+			File file = new File(args[i]);
+			String password = args[i+1];
+			readKey(file, password);
+		}
 	}
 
 	public void listProvs() throws FileNotFoundException {
@@ -299,7 +329,7 @@ public class App {
 	 * @throws UnsupportedEncodingException
 	 * @throws NoSuchAlgorithmException
 	 */
-	public byte[] derivePKCS12Key(String password, byte[] salt, int id, int iter, int needLen, MDSpec mdSpec)
+	public byte[] derivePKCS12Key(MDSpec mdSpec, String password, byte[] salt, int id, int iter, int needLen)
 			throws UnsupportedEncodingException, NoSuchAlgorithmException {
 		byte[] pass = password.getBytes("UTF-16BE");
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -350,8 +380,6 @@ public class App {
 					arraycopy(B, 0, I, blockOffset, B.length);
 				}
 			}
-
-			break;
 		}
 
 		return out.toByteArray();
@@ -366,48 +394,68 @@ public class App {
 
 	static final BouncyCastleProvider BC_PROV = new BouncyCastleProvider();
 
-	public byte[] pbkdf1(String password, byte[] salt, int iter) throws NoSuchAlgorithmException {
-		byte[] dk = hash(MDSpec.SHA1, password.getBytes(), salt);
-		return hashIter(MDSpec.SHA1, dk, iter-1);
+	public byte[] pbkdf1(MDSpec mdSpec, String password, byte[] salt, int iter) throws NoSuchAlgorithmException {
+		byte[] dk = hash(mdSpec, password.getBytes(), salt);
+		return hashIter(mdSpec, dk, iter-1);
 	}
 	
-	public byte[][] deriveSha1TripleDesKeyIv(String password, byte[] salt, int iter) throws UnsupportedEncodingException, NoSuchAlgorithmException {
+	public byte[][] derivePKCS12KeyIv(MDSpec mdSpec, String password, byte[] salt, int iter, int keyLen, int ivLen) throws UnsupportedEncodingException, NoSuchAlgorithmException {
 		String pass = password + '\0';
 		
-		byte[] key = derivePKCS12Key(pass, salt, 1, iter, 16, MDSpec.SHA1);
+		byte[] key = derivePKCS12Key(mdSpec, pass, salt, 1, iter, keyLen);
 		printBytes("key", key);
 
-		byte[] iv = derivePKCS12Key(pass, salt, 2, iter, 16, MDSpec.SHA1);
+		byte[] iv = derivePKCS12Key(mdSpec, pass, salt, 2, iter, ivLen);
 		printBytes("iv", iv);
 		
 		return new byte[][] { key, iv };
 	}
 
-	public byte[][] deriveSEEDKeyIv(String password, byte[] salt, int iter) throws NoSuchAlgorithmException {
+	public byte[][] deriveSEEDKeyIv(MDSpec mdSpec, String password, byte[] salt, int iter, int keyLen, int ivLen) throws NoSuchAlgorithmException {
 		// 추출키(DK) 생성
-		byte[] dk = pbkdf1(password, salt, iter);
+		byte[] dk = pbkdf1(mdSpec, password, salt, iter);
 
 		// 생성된 추출키(DK)에서 처음 16바이트를 암호화 키(K)로 정의한다.
-		byte[] key = subarray(dk, 0, 16);
+		byte[] key = subarray(dk, 0, keyLen);
 		printBytes("key", key);
 
 		// 추출키(DK)에서 암호화 키(K)를 제외한 나머지 4바이트를 SHA-1
 		// 으로 해쉬하여 20바이트의 값(DIV)을 생성하고, 그 중 처음 16바이트를 초기
 		// 벡터(IV)로 정의한다.
 		
-		byte[] tmp4Bytes = subarray(dk, 16, 40);
-		byte[] div = hash(MDSpec.SHA1, tmp4Bytes);
-		byte[] iv = subarray(div, 0, 16);
+		byte[] tempBytes = subarray(dk, keyLen, dk.length);
+		printBytes("tempBytes", tempBytes);
+		byte[] div = hash(mdSpec, tempBytes);
+		byte[] iv = subarray(div, 0, ivLen);
 		printBytes("iv", iv);
 		
 		return new byte[][] { key, iv };
 	}
 
+	public byte[][] derivePKCS5KeyIv(MDSpec mdSpec, String password, byte[] salt, int iter, int keyLen, int ivLen) throws NoSuchAlgorithmException {
+		// 추출키(DK) 생성
+		byte[] dk = pbkdf1(mdSpec, password, salt, iter);
+
+		// 생성된 추출키(DK)에서 처음 16바이트를 암호화 키(K)로 정의한다.
+		byte[] key = subarray(dk, 0, keyLen);
+		printBytes("key", key);
+
+		// 16 번째 앞 길이를 잘라낸다.
+
+		byte[] iv = subarray(dk, 16 - ivLen, 16);
+		printBytes("iv", iv);
+		
+		return new byte[][] { key, iv };
+	}
+	
 	public static void main(String[] args) throws Exception {
+		if ( args.length < 2 || args.length % 2 != 0 ) {
+			System.err.format("java %s <PKCS#8 private key file> <password> [ <PKCS#8 private key file> <password> ... ]\n", App.class.getName());
+			return;
+		}
+		
 		Security.addProvider(BC_PROV);
-
-		new App().run();
-
+		new App().run(args);
 		log.debug("OK");
 	}
 }
