@@ -10,6 +10,8 @@ import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
 import javax.crypto.EncryptedPrivateKeyInfo;
 
@@ -152,5 +154,16 @@ public class CryptUtil {
 		}
 
 		return out.toByteArray();
+	}
+	
+	@SuppressWarnings("unchecked")
+	public static <K, V> Map<K, V> toMap(Object ... args) {
+		Map<K, V> map = new HashMap<>();
+		for ( int i = 0 ; i < args.length ; i += 2 ) {
+			K k = (K)args[i];
+			V v = (V)args[i+1];
+			map.put(k, v);
+		}
+		return map;
 	}
 }
