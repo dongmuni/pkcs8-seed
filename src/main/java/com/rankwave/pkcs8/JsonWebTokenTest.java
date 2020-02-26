@@ -4,10 +4,11 @@ import static com.rankwave.pkcs8.CryptUtil.showObject;
 
 import java.security.NoSuchAlgorithmException;
 import java.util.Date;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.apache.commons.codec.DecoderException;
+import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.codec.binary.Hex;
 
 import io.jsonwebtoken.Claims;
@@ -18,7 +19,7 @@ public class JsonWebTokenTest {
 	
 	@SuppressWarnings("unchecked")
 	public static <K, V> Map<K, V> toMap(Object ... args) {
-		Map<K, V> map = new HashMap<>();
+		Map<K, V> map = new LinkedHashMap<>();
 		for ( int i = 0 ; i < args.length ; i += 2 ) {
 			K k = (K)args[i];
 			V v = (V)args[i+1];
@@ -31,26 +32,23 @@ public class JsonWebTokenTest {
 	
 	public static byte[] secret() {
 		try {
-			return Hex.decodeHex("29655d56e8c0050781ed55ede0383e2409dee8b476b0c19c80b54d36109a57d5");
+			return Hex.decodeHex("368e91f9e4a8802f687c34b1068c8ea2be61d12902ecd5c54c0f928c9171ec28");
 		} catch (DecoderException e) {
 			e.printStackTrace();
 			return null;
 		}
 	}
 	
-	public static String createJwt(String userid, long expMs) {
+	public static String createJwt(String issuer, long expMs) {
 		Map<String, Object> headers = toMap(
-				"typ", "JWT", 
-				"alg", "HS256"
-		);
-		
-		Map<String, Object> payloads = toMap(
-				"userid", userid
+				"alg", "HS256",
+				"typ", "JWT"
 		);
 		
 		String jwt = Jwts.builder()
 				.setHeader(headers)
-				.setClaims(payloads)
+				.setIssuer(issuer)
+				.setIssuedAt(new Date())
 				.setExpiration(new Date(System.currentTimeMillis() + expMs))
 				.signWith(SignatureAlgorithm.HS256, SECRET)
 				.compact();
@@ -70,8 +68,18 @@ public class JsonWebTokenTest {
 	}
 	
 	public static void main(String[] args) throws NoSuchAlgorithmException {
-		String jwt = createJwt("dmlim@nate.com", 10000L);
+		String jwt = createJwt("dmp-admin", 60000L);
 		showObject("jwt", jwt);
 		parseJwt(jwt);
+		
+		String[] arr = jwt.split("\\.");
+		
+		String header = new String(Base64.decodeBase64(arr[0]));
+		String payload = new String(Base64.decodeBase64(arr[1]));
+		String signature = arr[2];
+		
+		System.out.format("HEADER:    %s\n", header);
+		System.out.format("PAYLOAD:   %s\n", payload);
+		System.out.format("SIGNAGURE: %s\n", signature);
 	}
 }
